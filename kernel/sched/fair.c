@@ -7500,7 +7500,7 @@ enum fastpaths {
 	PREV_CPU_BIAS,
 };
 
-static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu)
+static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu, int sync)
 {
 	bool boosted, prefer_idle;
 	struct sched_domain *sd;
@@ -7538,6 +7538,22 @@ static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu)
 
 	fbt_env.placement_boost = task_boost_policy(p);
 	fbt_env.avoid_prev_cpu = false;
+
+	if (prefer_idle || fbt_env.need_idle)
+		sync = 0;
+
+	if (sysctl_sched_sync_hint_enable && sync) {
+		int cpu = smp_processor_id();
+		/* Curtis, 20180111, ux realm*/
+		if (bias_to_waker_cpu(p, cpu, rtg_target) &&
+			(!is_uxtop || cpu >= FIRST_BIG_CORE)) {
+			schedstat_inc(p->se.statistics.nr_wakeups_secb_sync);
+			schedstat_inc(this_rq()->eas_stats.secb_sync);
+			target_cpu = cpu;
+			fastpath = SYNC_WAKEUP;
+			goto out;
+		}
+	}
 
 	if (bias_to_prev_cpu(p, rtg_target)) {
 		target_cpu = prev_cpu;
@@ -7673,12 +7689,8 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 			cpumask_test_cpu(cpu, tsk_cpus_allowed(p)));
 	}
 
-	if (energy_aware()) {
-		rcu_read_lock();
-		new_cpu = select_energy_cpu_brute(p, prev_cpu;
-		rcu_read_unlock();
-		return new_cpu;
-	}
+	if (energy_aware())
+		return select_energy_cpu_brute(p, prev_cpu);
 
 	rcu_read_lock();
 	for_each_domain(cpu, tmp) {
@@ -12163,7 +12175,7 @@ void check_for_migration(struct rq *rq, struct task_struct *p)
 
 		raw_spin_lock(&migration_lock);
 		rcu_read_lock();
-		new_cpu = select_energy_cpu_brute(p, cpu);
+		new_cpu = select_energy_cpu_brute(p, cpu, 0);
 		rcu_read_unlock();
 		if (capacity_orig_of(new_cpu) > capacity_orig_of(cpu)) {
 			active_balance = kick_active_balance(rq, p, new_cpu);
