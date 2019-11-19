@@ -172,6 +172,7 @@ unsigned int sysctl_sched_min_task_util_for_boost = 51;
 /* 0.68ms default for 20ms window size scaled to 1024 */
 unsigned int sysctl_sched_min_task_util_for_colocation = 35;
 #endif
+
 static unsigned int __maybe_unused sched_small_task_threshold = 102;
 
 static inline void update_load_add(struct load_weight *lw, unsigned long inc)
@@ -3291,9 +3292,7 @@ static inline void set_tg_cfs_propagate(struct cfs_rq *cfs_rq) {}
 
 static inline void cfs_rq_util_change(struct cfs_rq *cfs_rq)
 {
-	struct rq *rq = rq_of(cfs_rq);
-
-	if (&rq->cfs == cfs_rq) {
+	if (&this_rq()->cfs == cfs_rq) {
 		/*
 		 * There are a few boundary cases this might miss but it should
 		 * get called often enough that that should (hopefully) not be
@@ -3310,7 +3309,7 @@ static inline void cfs_rq_util_change(struct cfs_rq *cfs_rq)
 		 *
 		 * See cpu_util().
 		 */
-		cpufreq_update_util(rq, 0);
+		cpufreq_update_util(rq_of(cfs_rq), 0);
 	}
 }
 
@@ -4950,7 +4949,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	 * passed.
 	 */
 	if (p->in_iowait)
-		cpufreq_update_util(rq, SCHED_CPUFREQ_IOWAIT);
+		cpufreq_update_this_cpu(rq, SCHED_CPUFREQ_IOWAIT);
 
 	for_each_sched_entity(se) {
 		if (se->on_rq)
@@ -4986,10 +4985,6 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 	if (!se) {
 		add_nr_running(rq, 1);
-
-		if (unlikely(p->nr_cpus_allowed == 1))
-			rq->nr_pinned_tasks++;
-
 		inc_rq_walt_stats(rq, p);
 	}
 
@@ -5083,10 +5078,6 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 	if (!se) {
 		sub_nr_running(rq, 1);
-
-		if (unlikely(p->nr_cpus_allowed == 1))
-			rq->nr_pinned_tasks--;
-
 		dec_rq_walt_stats(rq, p);
 	}
 
@@ -7555,7 +7546,7 @@ static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu,
 	sd = rcu_dereference(per_cpu(sd_ea, prev_cpu));
 	if (!sd) {
 		target_cpu = prev_cpu;
-		goto out;
+		goto unlock;
 	}
 
 	sync_entity_load_avg(&p->se);
@@ -7565,14 +7556,14 @@ static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu,
 				    prefer_idle, &fbt_env);
 	if (next_cpu == -1) {
 		target_cpu = prev_cpu;
-		goto out;
+		goto unlock;
 	}
 
 	if (fbt_env.placement_boost || fbt_env.need_idle ||
 			(rtg_target && (!cpumask_test_cpu(prev_cpu, rtg_target) ||
 			cpumask_test_cpu(next_cpu, rtg_target)))) {
 		target_cpu = next_cpu;
-		goto out;
+		goto unlock;
 	}
 
 	/* Unconditionally prefer IDLE CPUs for boosted/prefer_idle tasks */
@@ -7580,7 +7571,7 @@ static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu,
 		schedstat_inc(p->se.statistics.nr_wakeups_secb_idle_bt);
 		schedstat_inc(this_rq()->eas_stats.secb_idle_bt);
 		target_cpu = next_cpu;
-		goto out;
+		goto unlock;
 	}
 
 	target_cpu = prev_cpu;
@@ -7614,7 +7605,7 @@ static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu,
 			schedstat_inc(p->se.statistics.nr_wakeups_secb_insuff_cap);
 			schedstat_inc(this_rq()->eas_stats.secb_insuff_cap);
 			target_cpu = next_cpu;
-			goto out;
+			goto unlock;
 		}
 
 		/* Check if EAS_CPU_NXT is a more energy efficient CPU */
@@ -7622,13 +7613,13 @@ static int select_energy_cpu_brute(struct task_struct *p, int prev_cpu,
 			schedstat_inc(p->se.statistics.nr_wakeups_secb_nrg_sav);
 			schedstat_inc(this_rq()->eas_stats.secb_nrg_sav);
 			target_cpu = eenv.cpu[eenv.next_idx].cpu_id;
-			goto out;
+			goto unlock;
 		}
 
 		schedstat_inc(p->se.statistics.nr_wakeups_secb_no_nrg_sav);
 		schedstat_inc(this_rq()->eas_stats.secb_no_nrg_sav);
 		target_cpu = prev_cpu;
-		goto out;
+		goto unlock;
 	}
 
 	schedstat_inc(p->se.statistics.nr_wakeups_secb_count);
@@ -10533,6 +10524,7 @@ static int idle_balance(struct rq *this_rq)
 	if (!is_min_capacity_cpu(this_cpu) && min_cap_cluster_has_misfit_task())
 		force_lb = true;
 
+
 	/*
 	 * We must set idle_stamp _before_ calling idle_balance(), such that we
 	 * measure the duration of idle_balance() as idle time.
@@ -11136,22 +11128,6 @@ static inline bool nohz_kick_needed(struct rq *rq, int *type)
 
 	if (time_before(now, nohz.next_balance))
 		return false;
-
-	if (unlikely(rq->nr_pinned_tasks > 0)) {
-		int delta = rq->nr_running - rq->nr_pinned_tasks;
-
-		/*
-		 * Check if it is possible to "unload" this CPU in case
-		 * of having pinned/affine tasks. Do not disturb idle
-		 * core if one of the below condition is true:
-		 *
-		 * - there is one pinned task and it is not "current"
-		 * - all tasks are pinned to this CPU
-		 */
-		if (delta < 2)
-			if (current->nr_cpus_allowed > 1 || !delta)
-				return false;
-	}
 
 	if (rq->nr_running >= 2 &&
 	    (!energy_aware() || cpu_overutilized(cpu)))
