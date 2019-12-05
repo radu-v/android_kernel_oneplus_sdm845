@@ -124,7 +124,3 @@ out/
 
 # Wireguard
 net/wireguard/
-
-# Build script and changelog generator
-build.sh
-changelog.sh
