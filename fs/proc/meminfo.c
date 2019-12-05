@@ -159,16 +159,11 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 #endif
 	show_val_kb(m, "a_shrink_num:   ", active_nr);
 	show_val_kb(m, "ina_shrink_num: ", inactive_nr);
-#ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER 
 	show_val_kb(m, "vmpressure_20:  ", atomic_read(&vmpress[0]));
 	show_val_kb(m, "vmpressure_40:  ", atomic_read(&vmpress[1]));
 	show_val_kb(m, "vmpressure_60:  ", atomic_read(&vmpress[2]));
 	show_val_kb(m, "vmpressure_80:  ", atomic_read(&vmpress[3]));
 	show_val_kb(m, "vmpressure_100: ", atomic_read(&vmpress[4]));
-#else
-	for (iter = 0; iter < 5; iter++)
-		show_val_kb(m, "vmpress:        ", vmpress[iter]);
-#endif
 	for (iter = 0; iter < 3; iter++)
 		show_val_kb(m, "priority:       ", priority_nr[iter]);
 	show_val_kb(m, "alloc_slow_nr:  ", alloc_slow_nr);

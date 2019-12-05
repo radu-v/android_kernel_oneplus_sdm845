@@ -436,11 +436,7 @@ extern struct uid_node **alloc_uid_hash_table(void);
 extern unsigned long killed_num;
 extern unsigned long inactive_nr;
 extern unsigned long active_nr;
-#ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER 
 extern atomic_t vmpress[];
-#else
-extern unsigned long vmpress[];
-#endif
 extern unsigned long priority_nr[];
 extern unsigned long alloc_slow_nr;
 extern void si_swapinfo(struct sysinfo *);
